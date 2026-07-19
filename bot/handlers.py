@@ -58,6 +58,15 @@ TYPE_LABELS = {"expense": "Expense", "income": "Income", "transfer": "Transfer"}
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
 
 
+def format_rupiah(amount: float) -> str:
+    """Format nominal ke Rupiah locale ID (titik ribuan, koma desimal).
+    Desimal cuma dimunculin kalau nominalnya emang punya pecahan (misal dari
+    input "8521.62") -> nominal bulat tetap tampil tanpa desimal kayak biasa."""
+    is_whole = abs(amount - round(amount)) < 0.005
+    raw = f"{amount:,.0f}" if is_whole else f"{amount:,.2f}"
+    return "Rp" + raw.replace(",", "#").replace(".", ",").replace("#", ".")
+
+
 def add_months(d: date, months: int) -> date:
     """Tambah N bulan ke tanggal, handle overflow hari (misal 31 Jan + 1 bulan -> 28/29 Feb)."""
     month_index = d.month - 1 + months
@@ -174,7 +183,7 @@ async def handle_message(message, bot: Bot) -> None:
 
     await bot.send_message(
         chat_id,
-        f"Rp{parsed.amount:,.0f} - {parsed.description}\nIni transaksi apa?".replace(",", "."),
+        f"{format_rupiah(parsed.amount)} - {parsed.description}\nIni transaksi apa?",
         reply_markup=keyboards.build_type_keyboard(),
     )
 
@@ -197,7 +206,7 @@ async def handle_set_balance_input(text: str, chat_id: int, session: dict, bot: 
     session.pop("pending_account_id", None)
     save_session(chat_id, session)
 
-    amount_str = f"Rp{amount:,.0f}".replace(",", ".")
+    amount_str = format_rupiah(amount)
     await bot.send_message(
         chat_id,
         f"✅ Saldo awal {account.name} diset ke {amount_str}.\nMau atur akun lain?",
@@ -228,7 +237,7 @@ async def handle_add_account_input(text: str, chat_id: int, session: dict, bot: 
         family_id = session["family_id"]
         create_account(family_id, session["name"], session["type"], amount)
         clear_session(chat_id)
-        amount_str = f"Rp{amount:,.0f}".replace(",", ".")
+        amount_str = format_rupiah(amount)
         await bot.send_message(chat_id, f"✅ Akun *{session['name']}* ditambahin, saldo awal {amount_str}.", parse_mode="Markdown")
 
 
@@ -318,7 +327,7 @@ async def _continue_installment_after_tenor(chat_id: int, session: dict, bot: Bo
 
 async def _send_installment_confirmation(chat_id: int, session: dict, bot: Bot, edit_query=None) -> None:
     label = "KPR" if session.get("obligation_type") == "kpr" else "Cicilan Kartu Kredit"
-    amount_str = f"Rp{session['amount_per_month']:,.0f}".replace(",", ".")
+    amount_str = format_rupiah(session['amount_per_month'])
     tenor_str = f"{session['tenor_months']} bulan" if session.get("tenor_months") else "Reguler (gak ada batas)"
     lines = [
         f"✅ *Konfirmasi {label}*",
@@ -424,9 +433,9 @@ async def _send_deposit_confirmation(chat_id: int, session: dict, bot: Bot, edit
     session["maturity_date"] = maturity.isoformat()
     save_session(chat_id, session)
 
-    principal_str = f"Rp{session['principal_amount']:,.0f}".replace(",", ".")
+    principal_str = format_rupiah(session['principal_amount'])
     est_interest = session["principal_amount"] * (session["interest_rate_pct_pa"] / 100) * (session["tenor_months"] / 12)
-    interest_str = f"Rp{est_interest:,.0f}".replace(",", ".")
+    interest_str = format_rupiah(est_interest)
 
     lines = [
         "✅ *Konfirmasi Deposito*",
@@ -440,10 +449,10 @@ async def _send_deposit_confirmation(chat_id: int, session: dict, bot: Bot, edit
     interest_mode = session.get("interest_mode")
     if interest_mode == "rollover":
         monthly_est = session["principal_amount"] * (session["interest_rate_pct_pa"] / 100) / 12
-        lines.append(f"Bunga bulanan (tgl {session['interest_payment_day']}): rollover ke pokok, est. Rp{monthly_est:,.0f}/bln".replace(",", "."))
+        lines.append(f"Bunga bulanan (tgl {session['interest_payment_day']}): rollover ke pokok, est. {format_rupiah(monthly_est)}/bln")
     elif interest_mode == "payout":
         monthly_est = session["principal_amount"] * (session["interest_rate_pct_pa"] / 100) / 12
-        lines.append(f"Bunga bulanan (tgl {session['interest_payment_day']}): cair ke akun, est. Rp{monthly_est:,.0f}/bln".replace(",", "."))
+        lines.append(f"Bunga bulanan (tgl {session['interest_payment_day']}): cair ke akun, est. {format_rupiah(monthly_est)}/bln")
     else:
         lines.append(f"Estimasi bunga (di akhir tenor): {interest_str}")
 
@@ -559,8 +568,8 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
         for acc in accounts:
             balance = get_account_balance(acc.id)
             total += balance
-            lines.append(f"{acc.name}: Rp{balance:,.0f}".replace(",", "."))
-        lines.append(f"\n*Total: Rp{total:,.0f}*".replace(",", "."))
+            lines.append(f"{acc.name}: {format_rupiah(balance)}")
+        lines.append(f"\n*Total: {format_rupiah(total)}*")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
     elif command == "/riwayat":
@@ -574,7 +583,7 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
             acc_name = (tx.get("accounts") or {}).get("name", "?")
             cat_name = (tx.get("categories") or {}).get("name", "")
             date_str = tx["transaction_date"]
-            amount_str = f"Rp{float(tx['amount']):,.0f}".replace(",", ".")
+            amount_str = format_rupiah(float(tx['amount']))
             desc = tx.get("description") or ""
             lines.append(f"{icon} {date_str} - {amount_str} {cat_name} ({acc_name}) {desc}")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
@@ -647,7 +656,7 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
         total = 0.0
         for inst in installments:
             label = "KPR" if inst.obligation_type == "kpr" else "Cicilan KK"
-            amount_str = f"Rp{inst.amount_per_month:,.0f}".replace(",", ".")
+            amount_str = format_rupiah(inst.amount_per_month)
             tenor_str = (
                 f"{inst.months_paid}/{inst.tenor_months} bulan"
                 if inst.tenor_months
@@ -658,7 +667,7 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
                 f"[{label}] {inst.name}: {amount_str}/bln (tgl {inst.billing_day}) — {tenor_str}{rate_str}"
             )
             total += inst.amount_per_month
-        lines.append(f"\n*Estimasi total bulan ini: Rp{total:,.0f}*".replace(",", "."))
+        lines.append(f"\n*Estimasi total bulan ini: {format_rupiah(total)}*")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
     elif command == "/updatebunga":
@@ -692,7 +701,7 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
         for dep in deposits:
             maturity = date.fromisoformat(dep.maturity_date)
             days_left = (maturity - today).days
-            principal_str = f"Rp{dep.principal_amount:,.0f}".replace(",", ".")
+            principal_str = format_rupiah(dep.principal_amount)
             lines.append(
                 f"{dep.name}: {principal_str} @ {dep.interest_rate_pct_pa}% p.a.\n"
                 f"  Jatuh tempo: {dep.maturity_date} ({days_left} hari lagi)"
@@ -703,7 +712,7 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
                 lines.append(f"  Bunga bulanan (tgl {dep.interest_payment_day}): cair ke akun")
             else:
                 est_interest = dep.principal_amount * (dep.interest_rate_pct_pa / 100) * (dep.tenor_months / 12)
-                interest_str = f"Rp{est_interest:,.0f}".replace(",", ".")
+                interest_str = format_rupiah(est_interest)
                 lines.append(f"  Est. bunga (di akhir tenor): {interest_str}")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
@@ -866,7 +875,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
             lines = ["📋 *Daftar akun:*\n"]
             for acc in accounts:
                 balance = get_account_balance(acc.id)
-                lines.append(f"{acc.name} ({acc.type}): Rp{balance:,.0f}".replace(",", "."))
+                lines.append(f"{acc.name} ({acc.type}): {format_rupiah(balance)}")
             await safe_edit_message_text(callback_query, "\n".join(lines), parse_mode="Markdown")
 
     elif prefix == "delacc":
@@ -1099,8 +1108,8 @@ async def handle_callback(callback_query, bot: Bot) -> None:
             new_principal = deposit.principal_amount + interest_earned
             new_maturity = add_months(date.fromisoformat(deposit.maturity_date), deposit.tenor_months)
             rollover_deposit(deposit.id, new_principal, new_maturity)
-            principal_str = f"Rp{new_principal:,.0f}".replace(",", ".")
-            interest_str = f"Rp{interest_earned:,.0f}".replace(",", ".")
+            principal_str = format_rupiah(new_principal)
+            interest_str = format_rupiah(interest_earned)
             await safe_edit_message_text(
                 callback_query,
                 f"🔄 {deposit.name} diperpanjang!\nBunga {interest_str} digabung ke pokok.\n"
@@ -1132,7 +1141,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
                 source="telegram",
             )
             update_deposit_last_interest_month(deposit.id, current_month)
-            interest_str = f"Rp{monthly_interest:,.0f}".replace(",", ".")
+            interest_str = format_rupiah(monthly_interest)
             await safe_edit_message_text(callback_query, f"✅ Bunga {deposit.name} {interest_str} dicatat masuk.")
         else:
             update_deposit_last_interest_month(deposit.id, current_month)
@@ -1148,7 +1157,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
 
 async def _send_confirmation(chat_id, draft, bot: Bot, edit_query=None) -> None:
     type_label = TYPE_LABELS.get(draft.get("type"), draft.get("type"))
-    amount_str = f"Rp{draft['amount']:,.0f}".replace(",", ".")
+    amount_str = format_rupiah(draft['amount'])
     lines = [f"✅ *Konfirmasi {type_label}*", f"{amount_str} - {draft.get('description', '')}"]
 
     account = get_account_by_id(draft["account_id"]) if draft.get("account_id") else None
@@ -1162,7 +1171,7 @@ async def _send_confirmation(chat_id, draft, bot: Bot, edit_query=None) -> None:
         else:  # expense atau transfer (keduanya ngurangin saldo akun sumber)
             projected = current_balance - draft["amount"]
         lines.append(
-            f"Saldo {account.name}: Rp{current_balance:,.0f} → Rp{projected:,.0f}".replace(",", ".")
+            f"Saldo {account.name}: {format_rupiah(current_balance)} → {format_rupiah(projected)}"
         )
 
     if draft.get("type") == "transfer":
@@ -1172,7 +1181,7 @@ async def _send_confirmation(chat_id, draft, bot: Bot, edit_query=None) -> None:
             to_projected = to_current + draft["amount"]
             lines.append(f"Ke: {to_account.name}")
             lines.append(
-                f"Saldo {to_account.name}: Rp{to_current:,.0f} → Rp{to_projected:,.0f}".replace(",", ".")
+                f"Saldo {to_account.name}: {format_rupiah(to_current)} → {format_rupiah(to_projected)}"
             )
     else:
         category = get_category_by_id(draft["category_id"]) if draft.get("category_id") else None
@@ -1209,7 +1218,7 @@ async def _finalize_transaction(chat_id, member: FamilyMember, draft: dict, bot:
 
     new_balance = get_account_balance(draft["account_id"])
     account = get_account_by_id(draft["account_id"])
-    balance_str = f"Rp{new_balance:,.0f}".replace(",", ".")
+    balance_str = format_rupiah(new_balance)
 
     await safe_edit_message_text(callback_query, 
         f"✅ Tersimpan!\nSaldo {account.name}: {balance_str}"
