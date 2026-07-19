@@ -32,10 +32,14 @@ MULTIPLIERS = {
     "k": 1_000,
 }
 
-# Pattern: angka (boleh ada . atau , sbg desimal/pemisah) + optional suffix
-# Contoh yang harus match: 25000 | 25rb | 25 rb | 25.000 | 7.5jt | 12,500
+# Pattern: angka (boleh ada . atau , sbg desimal/pemisah, BOLEH BERULANG buat
+# pemisah ribuan multi-grup) + optional suffix
+# Contoh yang harus match: 25000 | 25rb | 25 rb | 25.000 | 7.5jt | 12,500 | 10.000.000,57
+# Alternatif 1: 1-3 digit diikuti >=1 grup 3-digit (pemisah ribuan berulang),
+#   opsional diakhiri 1 grup 1-2 digit (desimal/sen) -> nangkep "10.000.000,57" sebagai 1 token utuh
+# Alternatif 2 (fallback lama): digit + opsional 1 grup pemisah bebas panjang -> nangkep "7.5jt", "25,5rb"
 NUMBER_PATTERN = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(juta|jt|ribu|rb|k)?\b",
+    r"(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)\s*(juta|jt|ribu|rb|k)?\b",
     re.IGNORECASE,
 )
 
@@ -45,32 +49,25 @@ MIN_BARE_NUMBER = 100
 
 
 def _normalize_number(raw_number: str, suffix: Optional[str]) -> float:
-    """Ubah string angka mentah + suffix jadi float nominal rupiah."""
+    """Ubah string angka mentah (boleh multi pemisah ribuan) + suffix jadi float nominal rupiah."""
     raw_number = raw_number.strip()
+    multiplier = MULTIPLIERS[suffix.lower()] if suffix else 1
 
-    if suffix:
-        # Ada suffix (rb/jt/k/dst) -> pemisah pasti desimal, bukan ribuan
-        # "7.5jt" -> 7.5 * 1_000_000 ; "25,5rb" -> 25.5 * 1000
-        normalized = raw_number.replace(",", ".")
-        base = float(normalized)
-        multiplier = MULTIPLIERS[suffix.lower()]
-        return base * multiplier
+    parts = re.split(r"[.,]", raw_number)
+    if len(parts) == 1:
+        return float(parts[0]) * multiplier
 
-    # Tanpa suffix -> perlu nebak apakah . / , itu pemisah ribuan atau desimal
-    # Heuristik: kalau ada tepat 3 digit setelah pemisah TERAKHIR dan angka
-    # sebelum pemisah <= 3 digit -> kemungkinan besar pemisah ribuan (25.000 / 12,500)
-    # Kalau cuma 1-2 digit di belakang -> kemungkinan desimal (25.5 -> 25.5, jarang kejadian tanpa suffix)
-    match = re.match(r"^(\d+)([.,])(\d+)$", raw_number)
-    if match:
-        integer_part, _, decimal_part = match.groups()
-        if len(decimal_part) == 3:
-            # pemisah ribuan, gabungkan tanpa titik/koma
-            return float(integer_part + decimal_part)
-        else:
-            # anggap desimal beneran (jarang untuk kasus rupiah tanpa suffix)
-            return float(integer_part + "." + decimal_part)
+    *thousand_groups, last_part = parts
 
-    return float(raw_number)
+    # Grup terakhir 3 digit (dan semua grup sebelumnya juga <=3 digit) -> semua
+    # pemisah adalah ribuan, gabungkan apa adanya (misal "10.000.000" -> 10000000)
+    if len(last_part) == 3 and all(len(p) <= 3 for p in thousand_groups):
+        return float("".join(parts)) * multiplier
+
+    # Grup terakhir 1-2 digit -> itu desimal/sen, sisanya pemisah ribuan
+    # (misal "10.000.000,57" -> 10000000.57 ; "7.5jt" -> 7.5 * 1_000_000)
+    integer_part = "".join(thousand_groups)
+    return float(f"{integer_part}.{last_part}") * multiplier
 
 
 def parse_transaction_text(text: str) -> Optional[ParsedTransaction]:
