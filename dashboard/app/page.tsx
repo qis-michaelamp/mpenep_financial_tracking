@@ -1,11 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
-import { getMonthlyTrend, getRecapForMonth } from "@/lib/recap";
+import { getMonthlyTrend, getRecapForMonth, getTransactionsForMonth } from "@/lib/recap";
 import { currentMonthStr } from "@/lib/format";
 import MonthPicker from "@/components/MonthPicker";
 import SummaryCards from "@/components/SummaryCards";
 import CategoryBreakdown from "@/components/CategoryBreakdown";
 import MonthlyTrendChart from "@/components/MonthlyTrendChart";
 import ExpenseDonut from "@/components/ExpenseDonut";
+import TransactionsTable from "@/components/TransactionsTable";
 import LogoutButton from "@/components/LogoutButton";
 
 const TREND_MONTHS = 6;
@@ -19,9 +20,10 @@ export default async function Home({
   const month = monthParam ?? currentMonthStr();
 
   const supabase = await createClient();
-  const [recap, trend] = await Promise.all([
+  const [recap, trend, transactions] = await Promise.all([
     getRecapForMonth(supabase, month),
     getMonthlyTrend(supabase, month, TREND_MONTHS),
+    getTransactionsForMonth(supabase, month),
   ]);
 
   return (
@@ -45,6 +47,8 @@ export default async function Home({
 
       <CategoryBreakdown title="Expense per Kategori" items={recap.expenseByCategory} barColor="var(--chart-expense)" />
       <CategoryBreakdown title="Income per Kategori" items={recap.incomeByCategory} barColor="var(--chart-income)" />
+
+      <TransactionsTable items={transactions} />
     </div>
   );
 }

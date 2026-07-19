@@ -61,6 +61,7 @@ from bot.supabase_client import (
 
 TYPE_LABELS = {"expense": "Expense", "income": "Income", "transfer": "Transfer"}
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
 
 
 _HARI_ID = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
@@ -689,6 +690,7 @@ def build_help_text(member: FamilyMember, greeting: bool = True) -> str:
     lines.append("/aset - lihat aset & estimasi gain/loss")
     lines.append("/updateharga <nama> <harga> - update harga terkini aset")
     lines.append("\n⚙️ *Lainnya*")
+    lines.append("/dashboard - link dashboard rekap keuangan")
     lines.append("/batal - batalin input yang lagi jalan")
     if member.role == "admin":
         lines.append("/undang <nama> - undang anggota keluarga baru")
@@ -980,6 +982,12 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
             return
         update_asset_price(asset.id, price, date.today())
         await bot.send_message(chat_id, f"✅ Harga {asset.name} diupdate ke {format_rupiah(price)}/{asset.unit}.")
+
+    elif command == "/dashboard":
+        if not DASHBOARD_URL:
+            await bot.send_message(chat_id, "Link dashboard belum diset. Hubungi admin buat setting env `DASHBOARD_URL`.")
+            return
+        await bot.send_message(chat_id, f"📊 Dashboard rekap keuangan:\n{DASHBOARD_URL}")
 
     elif command == "/batal":
         clear_session(chat_id)

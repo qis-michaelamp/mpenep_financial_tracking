@@ -26,6 +26,12 @@ export function formatCompact(amount: number): string {
   return `${sign}${abs}`;
 }
 
+export function dateLabel(dateStr: string): string {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
+
 export function currentMonthStr(): string {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, "0");

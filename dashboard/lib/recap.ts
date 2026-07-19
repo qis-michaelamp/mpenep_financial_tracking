@@ -145,3 +145,64 @@ export async function getRecapForMonth(
     expenseByCategory: groupByCategory(expenseRows),
   };
 }
+
+export type TransactionDetail = {
+  id: string;
+  type: "income" | "expense" | "transfer";
+  amount: number;
+  description: string | null;
+  transactionDate: string;
+  categoryName: string | null;
+  categoryIcon: string | null;
+  accountName: string;
+  toAccountName: string | null;
+};
+
+type TransactionDetailRow = {
+  id: string;
+  type: "income" | "expense" | "transfer";
+  amount: number;
+  description: string | null;
+  transaction_date: string;
+  accounts: { name: string } | null;
+  to_accounts: { name: string } | null;
+  categories: { name: string; icon: string | null } | null;
+};
+
+/**
+ * Ambil detail transaksi 1 bulan (semua tipe, termasuk transfer) buat tabel rekap
+ * yang bisa di-group per tanggal atau per kategori di client.
+ */
+export async function getTransactionsForMonth(
+  supabase: SupabaseClient,
+  monthStr: string
+): Promise<TransactionDetail[]> {
+  const { start, end } = monthRange(monthStr);
+
+  const { data, error } = await supabase
+    .from("transactions")
+    .select(
+      "id, type, amount, description, transaction_date, " +
+        "accounts:account_id(name), to_accounts:to_account_id(name), categories:category_id(name, icon)"
+    )
+    .gte("transaction_date", start)
+    .lt("transaction_date", end)
+    .order("transaction_date", { ascending: false })
+    .returns<TransactionDetailRow[]>();
+
+  if (error) {
+    throw new Error(`Gagal ambil detail transaksi: ${error.message}`);
+  }
+
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    type: r.type,
+    amount: Number(r.amount),
+    description: r.description,
+    transactionDate: r.transaction_date,
+    categoryName: r.categories?.name ?? null,
+    categoryIcon: r.categories?.icon ?? null,
+    accountName: r.accounts?.name ?? "?",
+    toAccountName: r.to_accounts?.name ?? null,
+  }));
+}
