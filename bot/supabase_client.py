@@ -90,6 +90,19 @@ class Deposit:
     last_interest_month: Optional[str]
 
 
+@dataclass
+class Asset:
+    id: str
+    family_id: str
+    name: str
+    asset_type: str
+    unit: str
+    quantity: float
+    buy_price: float
+    current_price: float
+    last_price_update: Optional[str]
+
+
 # ============================================
 # FAMILY MEMBER
 # ============================================
@@ -578,6 +591,88 @@ def get_account_expense_this_month(account_id: str) -> float:
         .execute()
     )
     return sum(float(r["amount"]) for r in res.data)
+
+
+# ============================================
+# ASSETS (emas, dollar, saham, dll -- terpisah dari /saldo karena gak likuid)
+# ============================================
+
+def _row_to_asset(r: dict) -> Asset:
+    return Asset(
+        id=r["id"],
+        family_id=r["family_id"],
+        name=r["name"],
+        asset_type=r["asset_type"],
+        unit=r["unit"],
+        quantity=float(r["quantity"]),
+        buy_price=float(r["buy_price"]),
+        current_price=float(r["current_price"]),
+        last_price_update=r.get("last_price_update"),
+    )
+
+
+def create_asset(
+    family_id: str,
+    name: str,
+    asset_type: str,
+    unit: str,
+    quantity: float,
+    buy_price: float,
+) -> str:
+    """current_price disamain ke buy_price pas dibuat -> gain/loss mulai dari 0 sampai di-/updateharga."""
+    client = get_client()
+    res = (
+        client.table("assets")
+        .insert(
+            {
+                "family_id": family_id,
+                "name": name,
+                "asset_type": asset_type,
+                "unit": unit,
+                "quantity": quantity,
+                "buy_price": buy_price,
+                "current_price": buy_price,
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+def get_assets(family_id: str) -> list[Asset]:
+    client = get_client()
+    res = (
+        client.table("assets")
+        .select("*")
+        .eq("family_id", family_id)
+        .order("asset_type")
+        .order("name")
+        .execute()
+    )
+    return [_row_to_asset(r) for r in res.data]
+
+
+def get_asset_by_name(family_id: str, name: str) -> Optional[Asset]:
+    """Cari case-insensitive exact match -> dipakai /updateharga."""
+    client = get_client()
+    res = (
+        client.table("assets")
+        .select("*")
+        .eq("family_id", family_id)
+        .ilike("name", name)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    return _row_to_asset(res.data[0])
+
+
+def update_asset_price(asset_id: str, new_price: float, today: date) -> None:
+    client = get_client()
+    client.table("assets").update(
+        {"current_price": new_price, "last_price_update": today.isoformat()}
+    ).eq("id", asset_id).execute()
 
 
 # ============================================

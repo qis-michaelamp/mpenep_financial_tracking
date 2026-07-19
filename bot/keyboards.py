@@ -141,6 +141,27 @@ def build_tenor_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+def build_asset_type_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton("🥇 Emas", callback_data="assettype:gold")],
+        [InlineKeyboardButton("💵 Dollar/Valas", callback_data="assettype:forex")],
+        [InlineKeyboardButton("📈 Saham/Reksadana", callback_data="assettype:stock")],
+        [InlineKeyboardButton("📦 Lainnya", callback_data="assettype:other")],
+        [InlineKeyboardButton("❌ Batal", callback_data="cancel")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_asset_confirm_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton("✅ Simpan", callback_data="assetconfirm:save"),
+            InlineKeyboardButton("❌ Batal", callback_data="assetconfirm:cancel"),
+        ]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
 def build_installment_confirm_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [

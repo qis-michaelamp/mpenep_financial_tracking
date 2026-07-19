@@ -27,6 +27,7 @@ from bot.supabase_client import (
     create_pending_member,
     credit_deposit_interest_rollover,
     account_has_dependencies,
+    create_asset,
     delete_account,
     get_account_balance,
     get_account_by_id,
@@ -34,6 +35,8 @@ from bot.supabase_client import (
     get_accounts,
     get_active_deposits,
     get_active_installments,
+    get_asset_by_name,
+    get_assets,
     get_categories,
     get_category_by_id,
     get_deposit_by_id,
@@ -47,6 +50,7 @@ from bot.supabase_client import (
     rollover_deposit,
     save_session,
     update_account_initial_balance,
+    update_asset_price,
     update_deposit_last_interest_month,
     update_installment_interest_rate,
     dismiss_deposit_reminder,
@@ -181,6 +185,11 @@ async def handle_message(message, bot: Bot) -> None:
     # Flow /tambahdeposito
     if session.get("flow") == "add_deposit" and session.get("awaiting"):
         await handle_add_deposit_input(text, chat_id, member, session, bot)
+        return
+
+    # Flow /tambahaset
+    if session.get("flow") == "add_asset" and session.get("awaiting"):
+        await handle_add_asset_input(text, chat_id, member, session, bot)
         return
 
     # Default: coba parse sebagai transaksi baru
@@ -521,6 +530,73 @@ async def _send_deposit_confirmation(chat_id: int, session: dict, bot: Bot, edit
         await bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
 
 
+ASSET_TYPE_LABELS = {"gold": "Emas", "forex": "Dollar/Valas", "stock": "Saham/Reksadana", "other": "Lainnya"}
+
+
+# ============================================
+# FLOW: /tambahaset
+# ============================================
+
+async def handle_add_asset_input(text: str, chat_id: int, member: FamilyMember, session: dict, bot: Bot) -> None:
+    awaiting = session.get("awaiting")
+
+    if awaiting == "asset_unit_label":
+        unit = text.strip()
+        if not unit:
+            await bot.send_message(chat_id, "Satuan gak boleh kosong. Ketik misal `USD` atau `barel`.", parse_mode="Markdown")
+            return
+        session["unit"] = unit
+        session["awaiting"] = "asset_name"
+        save_session(chat_id, session)
+        await bot.send_message(chat_id, "Nama asetnya apa? (misal: Emas Antam)")
+
+    elif awaiting == "asset_name":
+        session["name"] = text.strip()
+        session["awaiting"] = "asset_quantity"
+        save_session(chat_id, session)
+        await bot.send_message(chat_id, f"Kuantitasnya berapa {session['unit']}?")
+
+    elif awaiting == "asset_quantity":
+        qty = parse_plain_amount(text)
+        if qty is None or qty <= 0:
+            await bot.send_message(chat_id, "Kuantitas gak valid. Ketik angka, misal `10` atau `10.5`.", parse_mode="Markdown")
+            return
+        session["quantity"] = qty
+        session["awaiting"] = "asset_buy_price"
+        save_session(chat_id, session)
+        await bot.send_message(chat_id, f"Harga beli per {session['unit']} berapa? (Rupiah)")
+
+    elif awaiting == "asset_buy_price":
+        price = parse_plain_amount(text)
+        if price is None or price <= 0:
+            await bot.send_message(chat_id, "Nominal gak valid. Ketik angka, misal `1350000`.", parse_mode="Markdown")
+            return
+        session["buy_price"] = price
+        session["awaiting"] = None
+        save_session(chat_id, session)
+        await _send_asset_confirmation(chat_id, session, bot)
+
+
+async def _send_asset_confirmation(chat_id: int, session: dict, bot: Bot, edit_query=None) -> None:
+    qty = session["quantity"]
+    unit = session["unit"]
+    buy_price = session["buy_price"]
+    lines = [
+        "✅ *Konfirmasi Aset*",
+        f"Tipe: {ASSET_TYPE_LABELS[session['asset_type']]}",
+        f"Nama: {session['name']}",
+        f"Kuantitas: {qty:g} {unit}",
+        f"Harga beli: {format_rupiah(buy_price)}/{unit}",
+        f"Total nilai beli: {format_rupiah(qty * buy_price)}",
+    ]
+    text = "\n".join(lines)
+    markup = keyboards.build_asset_confirm_keyboard()
+    if edit_query:
+        await safe_edit_message_text(edit_query, text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        await bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+
+
 async def handle_register(text: str, chat_id: int, bot: Bot) -> None:
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
@@ -608,6 +684,10 @@ def build_help_text(member: FamilyMember, greeting: bool = True) -> str:
     lines.append("\n📈 *Deposito*")
     lines.append("/tambahdeposito - daftar deposito baru")
     lines.append("/deposito - lihat deposito aktif")
+    lines.append("\n📦 *Aset & Investasi*")
+    lines.append("/tambahaset - daftar aset baru (emas/valas/saham/lain)")
+    lines.append("/aset - lihat aset & estimasi gain/loss")
+    lines.append("/updateharga <nama> <harga> - update harga terkini aset")
     lines.append("\n⚙️ *Lainnya*")
     lines.append("/batal - batalin input yang lagi jalan")
     if member.role == "admin":
@@ -834,6 +914,72 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
                 interest_str = format_rupiah(est_interest)
                 lines.append(f"  Est. bunga (di akhir tenor): {interest_str}")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
+
+    elif command == "/tambahaset":
+        session = {"flow": "add_asset"}
+        save_session(chat_id, session)
+        await bot.send_message(
+            chat_id, "Aset apa yang mau ditambahin?", reply_markup=keyboards.build_asset_type_keyboard()
+        )
+
+    elif command == "/aset":
+        assets = get_assets(member.family_id)
+        if not assets:
+            await bot.send_message(chat_id, "Belum ada aset terdaftar. Coba /tambahaset.")
+            return
+
+        lines = ["📦 *Aset & Investasi:*"]
+        total_current = 0.0
+        total_buy = 0.0
+        current_type = None
+        for a in assets:
+            if a.asset_type != current_type:
+                current_type = a.asset_type
+                lines.append(f"\n*{ASSET_TYPE_LABELS[a.asset_type]}*")
+            current_value = a.quantity * a.current_price
+            buy_value = a.quantity * a.buy_price
+            gain = current_value - buy_value
+            gain_pct = (gain / buy_value * 100) if buy_value else 0
+            total_current += current_value
+            total_buy += buy_value
+            sign = "+" if gain >= 0 else ""
+            lines.append(
+                f"{a.name}: {a.quantity:g} {a.unit} @ {format_rupiah(a.current_price)}\n"
+                f"  Nilai sekarang: {format_rupiah(current_value)} ({sign}{format_rupiah(gain)}, {sign}{gain_pct:.1f}%)"
+            )
+            if a.last_price_update:
+                lines.append(f"  Update harga terakhir: {a.last_price_update}")
+
+        total_gain = total_current - total_buy
+        sign = "+" if total_gain >= 0 else ""
+        lines.append(f"\n*Total nilai aset: {format_rupiah(total_current)}* ({sign}{format_rupiah(total_gain)})")
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
+
+    elif command == "/updateharga":
+        parts = text.split()
+        if len(parts) < 3:
+            await bot.send_message(
+                chat_id,
+                "Format: `/updateharga <nama aset> <harga baru>`\nContoh: `/updateharga Emas Antam 1350000`",
+                parse_mode="Markdown",
+            )
+            return
+        price = parse_plain_amount(parts[-1])
+        if price is None or price <= 0:
+            await bot.send_message(chat_id, "Harga gak valid. Ketik angka, misal `1350000`.", parse_mode="Markdown")
+            return
+        asset_name = " ".join(parts[1:-1])
+        asset = get_asset_by_name(member.family_id, asset_name)
+        if asset is None:
+            assets = get_assets(member.family_id)
+            if assets:
+                names = ", ".join(a.name for a in assets)
+                await bot.send_message(chat_id, f"Aset '{asset_name}' gak ketemu. Aset yang ada: {names}")
+            else:
+                await bot.send_message(chat_id, f"Aset '{asset_name}' gak ketemu. Belum ada aset terdaftar, coba /tambahaset.")
+            return
+        update_asset_price(asset.id, price, date.today())
+        await bot.send_message(chat_id, f"✅ Harga {asset.name} diupdate ke {format_rupiah(price)}/{asset.unit}.")
 
     elif command == "/batal":
         clear_session(chat_id)
@@ -1137,6 +1283,19 @@ async def handle_callback(callback_query, bot: Bot) -> None:
         save_session(chat_id, session)
         await safe_edit_message_text(callback_query, "Suku bunga baru (%)?")
 
+    elif prefix == "assettype":
+        session["asset_type"] = value
+        if value in ("forex", "other"):
+            session["awaiting"] = "asset_unit_label"
+            save_session(chat_id, session)
+            prompt = "Mata uangnya apa? (misal USD, SGD)" if value == "forex" else "Satuan aset ini apa? (misal: barel, oz, unit)"
+            await safe_edit_message_text(callback_query, prompt)
+        else:
+            session["unit"] = {"gold": "gram", "stock": "lot"}[value]
+            session["awaiting"] = "asset_name"
+            save_session(chat_id, session)
+            await safe_edit_message_text(callback_query, "Nama asetnya apa? (misal: Emas Antam)")
+
     elif data == "instconfirm:save":
         create_installment(
             family_id=member.family_id,
@@ -1176,6 +1335,22 @@ async def handle_callback(callback_query, bot: Bot) -> None:
         await safe_edit_message_text(callback_query, f"✅ Deposito {session['name']} berhasil didaftarkan!")
 
     elif data == "depoconfirm:cancel":
+        clear_session(chat_id)
+        await safe_edit_message_text(callback_query, "❌ Dibatalkan.")
+
+    elif data == "assetconfirm:save":
+        create_asset(
+            family_id=member.family_id,
+            name=session["name"],
+            asset_type=session["asset_type"],
+            unit=session["unit"],
+            quantity=session["quantity"],
+            buy_price=session["buy_price"],
+        )
+        clear_session(chat_id)
+        await safe_edit_message_text(callback_query, f"✅ {session['name']} berhasil didaftarkan!")
+
+    elif data == "assetconfirm:cancel":
         clear_session(chat_id)
         await safe_edit_message_text(callback_query, "❌ Dibatalkan.")
 
