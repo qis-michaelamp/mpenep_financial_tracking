@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/webhook.py": {
+      "runtime": "python3.12"
+    },
+    "api/cron_reminder.py": {
+      "runtime": "python3.12"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron_reminder",
+      "schedule": "0 1 * * *"
+    }
+  ]
+}
