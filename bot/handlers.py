@@ -698,7 +698,9 @@ def build_help_text(member: FamilyMember, greeting: bool = True) -> str:
 
 
 async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot) -> None:
-    command = text.split()[0].lower()
+    # Telegram kadang nyisipin "@namabot" di belakang command (misal pas dipilih dari
+    # menu saran) -> "/dashboard@mpenep_bot". Strip dulu biar tetep match ke "/dashboard".
+    command = text.split()[0].split("@")[0].lower()
 
     if command in ("/start", "/help"):
         await bot.send_message(chat_id, build_help_text(member), parse_mode="Markdown")
