@@ -58,6 +58,24 @@ TYPE_LABELS = {"expense": "Expense", "income": "Income", "transfer": "Transfer"}
 BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "")
 
 
+_HARI_ID = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+_BULAN_ID = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+]
+
+# Batas /riwayat -> jaga query & panjang pesan tetap ringan meski user minta banyak
+RIWAYAT_DEFAULT_LIMIT = 10
+RIWAYAT_MAX_LIMIT = 50
+
+
+def format_date_id(date_str: str) -> str:
+    """"2026-07-19" -> "Sabtu, 19 Juli 2026" tanpa gantung ke locale sistem
+    (locale Indonesia sering gak ke-install di runtime serverless)."""
+    d = date.fromisoformat(date_str)
+    return f"{_HARI_ID[d.weekday()]}, {d.day} {_BULAN_ID[d.month - 1]} {d.year}"
+
+
 def format_rupiah(amount: float) -> str:
     """Format nominal ke Rupiah locale ID (titik ribuan, koma desimal).
     Desimal cuma dimunculin kalau nominalnya emang punya pecahan (misal dari
@@ -538,7 +556,7 @@ def build_help_text(member: FamilyMember, greeting: bool = True) -> str:
         lines.append("`kopi 25000` atau `gaji bulan ini 8jt`\n")
     lines.append("Command yang tersedia:")
     lines.append("/saldo - lihat saldo semua akun")
-    lines.append("/riwayat - 10 transaksi terakhir")
+    lines.append("/riwayat [jumlah] - riwayat transaksi (default 10, maks 50)")
     lines.append("/manajemenakun - tambah/hapus/lihat akun")
     lines.append("/setmodal - atur/koreksi saldo awal akun")
     lines.append("/tambahcicilan - daftar cicilan KK/KPR baru")
@@ -573,19 +591,47 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
     elif command == "/riwayat":
-        txs = get_recent_transactions(member.family_id, limit=10)
+        limit = RIWAYAT_DEFAULT_LIMIT
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1:
+            try:
+                limit = int(parts[1].strip())
+            except ValueError:
+                limit = RIWAYAT_DEFAULT_LIMIT
+        limit = max(1, min(limit, RIWAYAT_MAX_LIMIT))
+
+        txs = get_recent_transactions(member.family_id, limit=limit)
         if not txs:
             await bot.send_message(chat_id, "Belum ada transaksi tercatat.")
             return
-        lines = ["📋 *10 transaksi terakhir:*\n"]
+
+        lines = [f"📋 *{len(txs)} transaksi terakhir:*"]
+        current_date = None
         for tx in txs:
+            date_str = tx["transaction_date"]
+            if date_str != current_date:
+                current_date = date_str
+                lines.append(f"\n📅 *{format_date_id(date_str)}*")
+
             icon = {"expense": "💸", "income": "💰", "transfer": "🔄"}[tx["type"]]
             acc_name = (tx.get("accounts") or {}).get("name", "?")
-            cat_name = (tx.get("categories") or {}).get("name", "")
-            date_str = tx["transaction_date"]
-            amount_str = format_rupiah(float(tx['amount']))
+            amount_str = format_rupiah(float(tx["amount"]))
             desc = tx.get("description") or ""
-            lines.append(f"{icon} {date_str} - {amount_str} {cat_name} ({acc_name}) {desc}")
+
+            if tx["type"] == "transfer":
+                to_acc_name = (tx.get("to_accounts") or {}).get("name", "?")
+                label = desc or "Transfer"
+                detail = f"{label} ({acc_name} → {to_acc_name})"
+            else:
+                cat_name = (tx.get("categories") or {}).get("name", "")
+                label = " · ".join(p for p in [cat_name, desc] if p)
+                detail = f"{label} ({acc_name})" if label else f"({acc_name})"
+
+            lines.append(f"{icon} {amount_str} — {detail}")
+
+        if limit == RIWAYAT_MAX_LIMIT and len(txs) == RIWAYAT_MAX_LIMIT:
+            lines.append(f"\n_Dibatasi {RIWAYAT_MAX_LIMIT} transaksi terbaru._")
+
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
     elif command == "/undang":
