@@ -66,6 +66,7 @@ class Installment:
     tenor_months: Optional[int]
     months_paid: int
     interest_rate_pct: Optional[float]
+    fixed_rate_months: Optional[int]
     last_charged_month: Optional[str]
     status: str
 
@@ -190,6 +191,7 @@ def _row_to_installment(r: dict) -> Installment:
         tenor_months=r.get("tenor_months"),
         months_paid=r["months_paid"],
         interest_rate_pct=float(r["interest_rate_pct"]) if r.get("interest_rate_pct") is not None else None,
+        fixed_rate_months=r.get("fixed_rate_months"),
         last_charged_month=r.get("last_charged_month"),
         status=r["status"],
     )
@@ -206,6 +208,7 @@ def create_installment(
     credit_card_id: Optional[str] = None,
     tenor_months: Optional[int] = None,
     interest_rate_pct: Optional[float] = None,
+    fixed_rate_months: Optional[int] = None,
 ) -> str:
     client = get_client()
     res = (
@@ -222,6 +225,7 @@ def create_installment(
                 "billing_day": billing_day,
                 "tenor_months": tenor_months,
                 "interest_rate_pct": interest_rate_pct,
+                "fixed_rate_months": fixed_rate_months,
             }
         )
         .execute()
@@ -557,6 +561,23 @@ def get_account_balance(account_id: str) -> float:
         balance += float(tx["amount"])
 
     return balance
+
+
+def get_account_expense_this_month(account_id: str) -> float:
+    """Total expense di akun ini dari tanggal 1 bulan berjalan s/d hari ini -> dipakai buat estimasi tagihan kartu kredit."""
+    client = get_client()
+    today = date.today()
+    start = today.replace(day=1)
+    res = (
+        client.table("transactions")
+        .select("amount")
+        .eq("account_id", account_id)
+        .eq("type", "expense")
+        .gte("transaction_date", start.isoformat())
+        .lte("transaction_date", today.isoformat())
+        .execute()
+    )
+    return sum(float(r["amount"]) for r in res.data)
 
 
 # ============================================

@@ -126,6 +126,7 @@ def build_obligation_type_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton("💳 Cicilan Kartu Kredit", callback_data="obligtype:cicilan_kk")],
         [InlineKeyboardButton("🏠 KPR", callback_data="obligtype:kpr")],
+        [InlineKeyboardButton("🔁 Langganan Bulanan", callback_data="obligtype:subscription")],
         [InlineKeyboardButton("❌ Batal", callback_data="cancel")],
     ]
     return InlineKeyboardMarkup(buttons)

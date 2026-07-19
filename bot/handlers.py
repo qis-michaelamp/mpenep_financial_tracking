@@ -30,6 +30,7 @@ from bot.supabase_client import (
     delete_account,
     get_account_balance,
     get_account_by_id,
+    get_account_expense_this_month,
     get_accounts,
     get_active_deposits,
     get_active_installments,
@@ -296,10 +297,16 @@ async def handle_add_installment_input(text: str, chat_id: int, member: FamilyMe
             return
         session["billing_day"] = day
         session["awaiting"] = None
-        save_session(chat_id, session)
-        await bot.send_message(
-            chat_id, "Tenornya gimana?", reply_markup=keyboards.build_tenor_type_keyboard()
-        )
+        if session.get("obligation_type") == "subscription":
+            # Langganan bulanan gak butuh tenor -> jalan terus sampai di-cancel manual
+            session["tenor_months"] = None
+            save_session(chat_id, session)
+            await _continue_installment_after_tenor(chat_id, session, bot)
+        else:
+            save_session(chat_id, session)
+            await bot.send_message(
+                chat_id, "Tenornya gimana?", reply_markup=keyboards.build_tenor_type_keyboard()
+            )
 
     elif awaiting == "installment_tenor_months":
         try:
@@ -325,6 +332,33 @@ async def handle_add_installment_input(text: str, chat_id: int, member: FamilyMe
             except ValueError:
                 await bot.send_message(chat_id, "Format gak valid. Ketik angka misal `7.5`, atau `skip`.")
                 return
+        if session["interest_rate_pct"] is not None:
+            session["awaiting"] = "installment_fixed_rate_months"
+            save_session(chat_id, session)
+            await bot.send_message(
+                chat_id,
+                "Bunga fix ini berlaku berapa bulan sebelum floating? Ketik angka (misal `24`), atau `skip` kalau langsung floating.",
+                parse_mode="Markdown",
+            )
+        else:
+            session["fixed_rate_months"] = None
+            session["awaiting"] = None
+            save_session(chat_id, session)
+            await _send_installment_confirmation(chat_id, session, bot)
+
+    elif awaiting == "installment_fixed_rate_months":
+        cleaned = text.strip().lower()
+        if cleaned in ("skip", "-", ""):
+            session["fixed_rate_months"] = None
+        else:
+            try:
+                months = int(cleaned)
+                if months <= 0:
+                    raise ValueError
+                session["fixed_rate_months"] = months
+            except ValueError:
+                await bot.send_message(chat_id, "Ketik jumlah bulan yang valid, misal `24`, atau `skip`.", parse_mode="Markdown")
+                return
         session["awaiting"] = None
         save_session(chat_id, session)
         await _send_installment_confirmation(chat_id, session, bot)
@@ -344,7 +378,9 @@ async def _continue_installment_after_tenor(chat_id: int, session: dict, bot: Bo
 
 
 async def _send_installment_confirmation(chat_id: int, session: dict, bot: Bot, edit_query=None) -> None:
-    label = "KPR" if session.get("obligation_type") == "kpr" else "Cicilan Kartu Kredit"
+    label = {"kpr": "KPR", "subscription": "Langganan Bulanan"}.get(
+        session.get("obligation_type"), "Cicilan Kartu Kredit"
+    )
     amount_str = format_rupiah(session['amount_per_month'])
     tenor_str = f"{session['tenor_months']} bulan" if session.get("tenor_months") else "Reguler (gak ada batas)"
     lines = [
@@ -355,7 +391,10 @@ async def _send_installment_confirmation(chat_id: int, session: dict, bot: Bot, 
         f"Tenor: {tenor_str}",
     ]
     if session.get("interest_rate_pct") is not None:
-        lines.append(f"Suku bunga: {session['interest_rate_pct']}% p.a.")
+        rate_line = f"Suku bunga: {session['interest_rate_pct']}% p.a."
+        if session.get("fixed_rate_months"):
+            rate_line += f" (fix {session['fixed_rate_months']} bulan pertama, lalu floating)"
+        lines.append(rate_line)
     text = "\n".join(lines)
     markup = keyboards.build_installment_confirm_keyboard()
     if edit_query:
@@ -555,15 +594,21 @@ def build_help_text(member: FamilyMember, greeting: bool = True) -> str:
         lines.append("Catat transaksi tinggal ketik langsung, contoh:")
         lines.append("`kopi 25000` atau `gaji bulan ini 8jt`\n")
     lines.append("Command yang tersedia:")
+    lines.append("\n💰 *Keuangan*")
     lines.append("/saldo - lihat saldo semua akun")
     lines.append("/riwayat [jumlah] - riwayat transaksi (default 10, maks 50)")
+    lines.append("\n🏦 *Akun*")
     lines.append("/manajemenakun - tambah/hapus/lihat akun")
     lines.append("/setmodal - atur/koreksi saldo awal akun")
-    lines.append("/tambahcicilan - daftar cicilan KK/KPR baru")
-    lines.append("/cicilan - lihat cicilan aktif & estimasi bulan ini")
+    lines.append("\n🏠 *Cicilan*")
+    lines.append("/tambahcicilan - daftar cicilan KK/KPR/langganan baru")
+    lines.append("/cicilan - lihat cicilan & langganan aktif")
     lines.append("/updatebunga - update suku bunga KPR")
+    lines.append("/kartukredit - ringkasan utang & langganan per kartu")
+    lines.append("\n📈 *Deposito*")
     lines.append("/tambahdeposito - daftar deposito baru")
     lines.append("/deposito - lihat deposito aktif")
+    lines.append("\n⚙️ *Lainnya*")
     lines.append("/batal - batalin input yang lagi jalan")
     if member.role == "admin":
         lines.append("/undang <nama> - undang anggota keluarga baru")
@@ -698,10 +743,10 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
         if not installments:
             await bot.send_message(chat_id, "Belum ada cicilan/KPR terdaftar. Coba /tambahcicilan.")
             return
-        lines = ["📋 *Cicilan & KPR aktif:*\n"]
+        lines = ["📋 *Cicilan, KPR & Langganan aktif:*\n"]
         total = 0.0
         for inst in installments:
-            label = "KPR" if inst.obligation_type == "kpr" else "Cicilan KK"
+            label = {"kpr": "KPR", "subscription": "Langganan"}.get(inst.obligation_type, "Cicilan KK")
             amount_str = format_rupiah(inst.amount_per_month)
             tenor_str = (
                 f"{inst.months_paid}/{inst.tenor_months} bulan"
@@ -709,6 +754,8 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
                 else f"bulan ke-{inst.months_paid + 1} (reguler)"
             )
             rate_str = f" · {inst.interest_rate_pct}% p.a." if inst.interest_rate_pct else ""
+            if inst.interest_rate_pct and inst.fixed_rate_months:
+                rate_str += f" (fix {inst.fixed_rate_months} bln)"
             lines.append(
                 f"[{label}] {inst.name}: {amount_str}/bln (tgl {inst.billing_day}) — {tenor_str}{rate_str}"
             )
@@ -731,6 +778,32 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
             await bot.send_message(
                 chat_id, "KPR yang mana?", reply_markup=keyboards.build_pick_kpr_keyboard(kpr_list)
             )
+
+    elif command == "/kartukredit":
+        cards = [a for a in get_accounts(member.family_id) if a.type == "credit_card"]
+        if not cards:
+            await bot.send_message(chat_id, "Belum ada akun tipe kartu kredit. Tambah dulu lewat /manajemenakun.")
+            return
+
+        installments = get_active_installments(member.family_id)
+        lines = ["💳 *Ringkasan Kartu Kredit:*"]
+        for card in cards:
+            outstanding = -get_account_balance(card.id)  # expense bikin balance negatif = utang
+            spend_this_month = get_account_expense_this_month(card.id)
+            card_items = [i for i in installments if i.credit_card_id == card.id]
+
+            lines.append(f"\n*{card.name}*")
+            lines.append(f"Utang saat ini: {format_rupiah(max(outstanding, 0))}")
+            lines.append(f"Total transaksi bulan ini: {format_rupiah(spend_this_month)}")
+
+            if card_items:
+                for inst in card_items:
+                    label = {"kpr": "KPR", "subscription": "Langganan"}.get(inst.obligation_type, "Cicilan")
+                    lines.append(f"  · [{label}] {inst.name}: {format_rupiah(inst.amount_per_month)}/bln")
+            else:
+                lines.append("  Belum ada cicilan/langganan yang nempel di kartu ini.")
+
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")
 
     elif command == "/tambahdeposito":
         session = {"flow": "add_deposit", "awaiting": "deposit_name"}
@@ -964,7 +1037,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
         session["obligation_type"] = value
         session["awaiting"] = "installment_name"
         save_session(chat_id, session)
-        label = "KPR" if value == "kpr" else "cicilan kartu kredit"
+        label = {"kpr": "KPR", "subscription": "langganan"}.get(value, "cicilan kartu kredit")
         await safe_edit_message_text(callback_query, f"Nama {label} ini apa?")
 
     elif prefix == "tenortype":
@@ -980,7 +1053,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
     elif prefix == "instacc":
         session["funding_account_id"] = value
         save_session(chat_id, session)
-        if session.get("obligation_type") == "cicilan_kk":
+        if session.get("obligation_type") in ("cicilan_kk", "subscription"):
             cc_accounts = [a for a in get_accounts(member.family_id) if a.type == "credit_card"]
             if not cc_accounts:
                 session["credit_card_id"] = None
@@ -1013,9 +1086,9 @@ async def handle_callback(callback_query, bot: Bot) -> None:
 
     elif prefix == "instcat":
         session["category_id"] = value
-        session["awaiting"] = "installment_billing_day"
+        session["awaiting"] = "installment_amount"
         save_session(chat_id, session)
-        await safe_edit_message_text(callback_query, "Tanggal jatuh tempo tiap bulan (1-31)?")
+        await safe_edit_message_text(callback_query, "Nominal per bulan berapa?")
 
     elif prefix == "intmode":
         if value == "tenor":
@@ -1076,6 +1149,7 @@ async def handle_callback(callback_query, bot: Bot) -> None:
             credit_card_id=session.get("credit_card_id"),
             tenor_months=session.get("tenor_months"),
             interest_rate_pct=session.get("interest_rate_pct"),
+            fixed_rate_months=session.get("fixed_rate_months"),
         )
         clear_session(chat_id)
         await safe_edit_message_text(callback_query, f"✅ {session['name']} berhasil didaftarkan!")
