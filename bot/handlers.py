@@ -11,6 +11,7 @@ invocation di Vercel itu instance baru yang gak inget request sebelumnya.
 
 from datetime import date, timedelta
 import calendar
+import html
 import os
 
 from telegram import Bot, Update
@@ -773,8 +774,6 @@ async def handle_command(text: str, chat_id: int, member: FamilyMember, bot: Bot
             await bot.send_message(chat_id, "Format: /undang Nama Orangnya")
             return
 
-        import html
-
         name = parts[1].strip()
         code = create_pending_member(member.family_id, name)
         safe_name = html.escape(name)  # cegah nama yang isinya <, >, & bikin HTML rusak
@@ -1147,11 +1146,14 @@ async def handle_callback(callback_query, bot: Bot) -> None:
             if not accounts:
                 await safe_edit_message_text(callback_query, "Belum ada akun terdaftar.")
                 return
-            lines = ["📋 *Daftar akun:*\n"]
+            # HTML mode + escape -> nama akun yang ada karakter kayak _ * ` [ gak bikin
+            # parsing Markdown Telegram rusak (pernah kejadian, lihat fix /undang).
+            lines = ["📋 <b>Daftar akun:</b>\n"]
             for acc in accounts:
                 balance = get_account_balance(acc.id)
-                lines.append(f"{acc.name} ({acc.type}): {format_rupiah(balance)}")
-            await safe_edit_message_text(callback_query, "\n".join(lines), parse_mode="Markdown")
+                safe_name = html.escape(acc.name)
+                lines.append(f"{safe_name} ({acc.type}): {format_rupiah(balance)}")
+            await safe_edit_message_text(callback_query, "\n".join(lines), parse_mode="HTML")
 
     elif prefix == "delacc":
         account = get_account_by_id(value)
