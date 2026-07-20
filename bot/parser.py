@@ -43,9 +43,9 @@ NUMBER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Threshold minimum: angka polos tanpa suffix di bawah ini dianggap BUKAN nominal
-# (misal biar "quantity 2 porsi" gak ke-detect sebagai transaksi Rp2)
-MIN_BARE_NUMBER = 100
+# Threshold minimum: angka polos tanpa suffix di bawah ini dianggap BUKAN nominal.
+# Diset ke 1 biar transaksi expense/income minimal Rp1 pun tetep bisa kecatat.
+MIN_BARE_NUMBER = 1
 
 
 def _normalize_number(raw_number: str, suffix: Optional[str]) -> float:
